@@ -11,6 +11,6 @@ questionary==1.10.0
 openpyxl==3.10.0
 pytest==7.4.3
 pytest-cov==4.1.0
-black==23.7.0
+black==24.3.0
 flake8==6.0.0
 mypy==1.4.1
