@@ -84,9 +84,8 @@ class ExcelParser(DatabaseBackupParser):
             for col_idx, header in enumerate(headers):
                 col = SourceColumn(
                     name=str(header).strip(),
-                    type_name=inferred_types.get(col_idx, "VARCHAR"),
+                    type=inferred_types.get(col_idx, "VARCHAR"),
                     nullable=True,
-                    default_value=None,
                 )
                 columns.append(col)
 
@@ -95,9 +94,6 @@ class ExcelParser(DatabaseBackupParser):
                 name=sheet_name,
                 columns=columns,
                 estimated_rows=row_count,
-                primary_key=None,
-                constraints=[],
-                foreign_keys=[],
             )
 
             schema.tables.append(table)

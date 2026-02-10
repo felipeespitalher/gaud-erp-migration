@@ -57,9 +57,8 @@ class CsvParser(DatabaseBackupParser):
         for i, header in enumerate(headers):
             col = SourceColumn(
                 name=header.strip(),
-                type_name=inferred_types.get(i, "VARCHAR"),
+                type=inferred_types.get(i, "VARCHAR"),
                 nullable=True,
-                default_value=None,
             )
             columns.append(col)
 
@@ -67,9 +66,6 @@ class CsvParser(DatabaseBackupParser):
             name=table_name,
             columns=columns,
             estimated_rows=len(rows) - 1,  # Exclude header
-            primary_key=None,
-            constraints=[],
-            foreign_keys=[],
         )
 
         schema = SourceSchema(

@@ -76,9 +76,8 @@ class AccessParser(DatabaseBackupParser):
 
                 col = SourceColumn(
                     name=str(col_name).strip(),
-                    type_name=inferred_type,
+                    type=inferred_type,
                     nullable=df[col_name].isnull().any(),
-                    default_value=None,
                 )
                 columns.append(col)
 
@@ -87,9 +86,6 @@ class AccessParser(DatabaseBackupParser):
                 name=table_name,
                 columns=columns,
                 estimated_rows=len(df),
-                primary_key=None,
-                constraints=[],
-                foreign_keys=[],
             )
 
             schema.tables.append(table)
