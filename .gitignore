@@ -53,3 +53,29 @@ dmypy.json
 # OS
 .DS_Store
 Thumbs.db
+
+# Poetry
+poetry.lock
+dist/
+build/
+
+# Virtual environments
+venv/
+.venv/
+ENV/
+
+# PyCharm
+.idea/
+*.iml
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# Mac
+.DS_Store
+
+# Environment files
+.env
+.env.local
+.env.*.local
