@@ -4,9 +4,11 @@ from typing import List, Optional
 import sqlparse
 from sqlparse.sql import Identifier, IdentifierList, Parenthesis, Token
 from src.schema.models import SourceSchema, SourceTable, SourceColumn, ForeignKey, Constraint
+from src.parser.backup_parser import DatabaseBackupParser
+from src.parser.dialect_detector import SqlDialectDetector
 
 
-class SqlParser:
+class SqlParser(DatabaseBackupParser):
     """Parser de SQL dump."""
 
     TYPE_MAPPING = {
@@ -60,10 +62,30 @@ class SqlParser:
 
         return sql_type.upper()
 
-    @staticmethod
-    def parse(sql_content: str) -> SourceSchema:
-        """Parse SQL dump completo."""
-        schema = SourceSchema(database_type="postgresql")
+    def __init__(self, dialect: Optional[str] = None):
+        """Initialize parser with optional dialect."""
+        self.dialect = dialect
+
+    def parse(
+        self,
+        sql_content: str,
+        selected_tables: Optional[List[str]] = None,
+    ) -> SourceSchema:
+        """
+        Parse SQL dump completo.
+
+        Args:
+            sql_content: SQL dump content
+            selected_tables: Optional list of table names to include
+
+        Returns:
+            SourceSchema: Parsed schema, optionally filtered by selected_tables
+        """
+        # Auto-detect dialect if not provided
+        if not self.dialect:
+            self.dialect = SqlDialectDetector.detect(sql_content)
+
+        schema = SourceSchema(database_type=self.dialect)
 
         # Parse com sqlparse
         parsed = sqlparse.parse(sql_content)
@@ -73,7 +95,9 @@ class SqlParser:
             if statement.get_type() == "CREATE":
                 table = SqlParser._parse_create_table(statement.value)
                 if table:
-                    schema.tables.append(table)
+                    # Filter by selected tables if provided
+                    if selected_tables is None or table.name in selected_tables:
+                        schema.tables.append(table)
 
         # Calcular totais
         schema.total_estimated_rows = sum(t.estimated_rows for t in schema.tables)
