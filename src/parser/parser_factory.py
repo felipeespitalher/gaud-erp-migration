@@ -1,9 +1,13 @@
 """Factory for creating appropriate parser based on file type."""
 from pathlib import Path
 from typing import Optional, List
+import mimetypes
 
 from src.parser.backup_parser import DatabaseBackupParser
 from src.parser.sql_parser import SqlParser
+from src.parser.csv_parser import CsvParser
+from src.parser.excel_parser import ExcelParser
+from src.parser.access_parser import AccessParser
 from src.parser.dialect_detector import SqlDialectDetector
 from src.schema.models import SourceSchema
 
@@ -45,14 +49,13 @@ class BackupParserFactory:
             if parser_type == 'sql':
                 return SqlParser()
             elif parser_type == 'csv':
-                # TODO: Implement CsvParser in PHASE 2
-                raise NotImplementedError("CSV parser coming in PHASE 2")
+                return CsvParser()
             elif parser_type == 'excel':
-                # TODO: Implement ExcelParser in PHASE 2
-                raise NotImplementedError("Excel parser coming in PHASE 2")
-            elif parser_type == 'json':
-                # TODO: Implement JsonParser in PHASE 2
-                raise NotImplementedError("JSON parser coming in PHASE 2")
+                return ExcelParser()
+
+        # Support .mdb and .accdb files
+        if ext in ('mdb', 'accdb'):
+            return AccessParser()
 
         raise ValueError(f"Unsupported backup format: {ext}")
 
@@ -93,8 +96,18 @@ class BackupParserFactory:
         Returns:
             SourceSchema: Parsed schema
         """
+        file_path_str = str(file_path).lower()
+        ext = file_path_str.split('.')[-1] if '.' in file_path_str else ''
+
         parser = BackupParserFactory.create_parser(file_path)
 
+        # Handle binary formats (Excel, Access)
+        if ext in ('xlsx', 'xls', 'mdb', 'accdb'):
+            with open(file_path, 'rb') as f:
+                content = f.read()
+            return parser.parse(content, selected_tables)
+
+        # Handle text formats (SQL, CSV)
         with open(file_path, 'r', encoding='utf-8', errors='ignore') as f:
             content = f.read()
 

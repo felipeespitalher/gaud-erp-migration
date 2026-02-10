@@ -9,12 +9,14 @@ import click
 from colorama import Fore, Style
 
 from config import app_config
-from src.parser.sql_parser import SqlParser
+from src.parser.parser_factory import BackupParserFactory
+from src.cli.table_selector import TableSelector
 from src.mapper.heuristic import HeuristicMapper
 from src.transformer.registry import TransformerRegistry
 from src.validator.data_validator import DataValidator
 from src.exporter.json_exporter import JsonExporter
 from src.api.gaud_client import GaudClient
+from src.api.data_importer import DataImporter
 
 
 class InteractiveCLI:
@@ -23,6 +25,7 @@ class InteractiveCLI:
     def __init__(self):
         """Initialize CLI."""
         self.gaud_client = GaudClient(app_config.gaud_api)
+        self.data_importer = DataImporter(self.gaud_client)
         self.transformer_registry = TransformerRegistry()
         self.current_migration = None
         self.current_schema = None
@@ -90,14 +93,22 @@ class InteractiveCLI:
         """Start new migration."""
         self.print_header("New Migration")
 
-        # List available backup files
+        # List available backup files (multiple formats)
         backup_dir = Path(app_config.backup_dir)
         backup_dir.mkdir(parents=True, exist_ok=True)
 
-        backup_files = sorted(backup_dir.glob("*.sql"))
+        # Support multiple file formats
+        patterns = ["*.sql", "*.csv", "*.xlsx", "*.xls", "*.json", "*.mdb", "*.accdb"]
+        backup_files = []
+        for pattern in patterns:
+            backup_files.extend(sorted(backup_dir.glob(pattern)))
+
+        # Remove duplicates and sort
+        backup_files = sorted(list(set(backup_files)))
 
         if not backup_files:
-            click.echo(f"{Fore.YELLOW}No SQL files found in {backup_dir}")
+            click.echo(f"{Fore.YELLOW}No backup files found in {backup_dir}")
+            click.echo(f"{Fore.YELLOW}Supported formats: SQL, CSV, Excel, JSON, Access")
             return
 
         click.echo("Available backups:")
@@ -117,46 +128,57 @@ class InteractiveCLI:
         """Process a migration step by step."""
         click.echo(f"\n{Fore.CYAN}Loading {backup_file.name}...")
 
-        # Read SQL
-        with open(backup_file, "r") as f:
-            sql_content = f.read()
+        # Step 0: Parse backup file
+        self.print_header("Step 0: Parse Backup File")
+        try:
+            parser = BackupParserFactory.create_parser(str(backup_file))
+            source_schema = BackupParserFactory.parse_backup(str(backup_file))
 
-        # Step 1: Parse
-        self.print_header("Step 1: Parse SQL Dump")
-        click.echo(f"{Fore.CYAN}Parsing schema...")
+            click.echo(f"{Fore.GREEN}✅ Parsed successfully!")
+            click.echo(f"   Format: {source_schema.database_type}")
+            click.echo(f"   Tables: {len(source_schema.tables)}")
+            click.echo(f"   Total columns: {sum(len(t.columns) for t in source_schema.tables)}")
+            click.echo(f"   Total rows: {sum(t.estimated_rows for t in source_schema.tables)}")
 
-        parser = SqlParser()
-        source_schema = parser.parse(sql_content)
+            for table in source_schema.tables[:5]:  # Show first 5
+                click.echo(f"   • {table.name} ({len(table.columns)} cols, {table.estimated_rows} rows)")
 
-        click.echo(f"{Fore.GREEN}✅ Parsed successfully!")
-        click.echo(f"   Tables: {len(source_schema.tables)}")
-        click.echo(f"   Total columns: {sum(len(t.columns) for t in source_schema.tables)}")
-
-        for table in source_schema.tables[:5]:  # Show first 5
-            click.echo(f"   • {table.name} ({len(table.columns)} cols)")
-
-        if len(source_schema.tables) > 5:
-            click.echo(f"   ... and {len(source_schema.tables) - 5} more")
+            if len(source_schema.tables) > 5:
+                click.echo(f"   ... and {len(source_schema.tables) - 5} more")
+        except Exception as e:
+            click.echo(f"{Fore.RED}Failed to parse backup: {e}")
+            return
 
         self.current_schema = source_schema
 
+        # Step 1: Select tables (NEW!)
+        self.print_header("Step 1: Select Tables to Import")
+        selector = TableSelector(source_schema)
+        selected_table_names = selector.prompt_selection()
+
+        if not selected_table_names:
+            click.echo(f"{Fore.YELLOW}No tables selected. Exiting.")
+            return
+
+        # Filter schema to only selected tables
+        filtered_schema = selector.filter_schema(source_schema)
+        self.current_schema = filtered_schema
+
         # Step 2: Auto-map
-        self._auto_map_schema(source_schema)
+        self._auto_map_schema(filtered_schema)
 
         # Step 3: Edit mappings (interactive)
         self._edit_mappings()
 
         # Step 4: Validate (optional)
-        if click.confirm("Validate data before export?", default=True):
-            self._validate_data(sql_content)
+        if click.confirm("Validate data before import?", default=True):
+            self._validate_schema()
 
-        # Step 5: Export
-        if click.confirm("Export to JSON?", default=True):
-            self._export_migration(backup_file.stem, source_schema, sql_content)
-
-        # Step 6: Import (optional)
-        if click.confirm("Import to Gaud API?", default=False):
-            self._import_migration()
+        # Step 5: Import via API
+        if click.confirm("Import to Gaud API now?", default=True):
+            self._import_via_endpoints(backup_file)
+        else:
+            click.echo(f"{Fore.YELLOW}Migration paused. You can import later.")
 
     def _auto_map_schema(self, source_schema):
         """Auto-map source schema to Gaud schema."""
@@ -203,86 +225,93 @@ class InteractiveCLI:
                 click.echo(f"{Fore.GREEN}All mappings configured!")
                 break
 
-    def _validate_data(self, sql_content: str):
-        """Validate data."""
-        self.print_header("Step 4: Validate Data")
+    def _validate_schema(self):
+        """Validate schema mappings."""
+        self.print_header("Step 4: Validate Schema")
 
-        click.echo(f"{Fore.CYAN}Validating data...")
+        click.echo(f"{Fore.CYAN}Validating mappings...")
 
         validator = DataValidator()
         errors = validator.validate(self.current_schema, self.mappings)
 
         click.echo(f"{Fore.GREEN}✅ Validation complete")
-        click.echo(f"   Errors: {len(errors)}")
+        click.echo(f"   Tables: {len(self.current_schema.tables)}")
+        click.echo(f"   Mappings: {len(self.mappings)}")
+        click.echo(f"   Issues: {len(errors)}")
 
         if errors:
-            click.echo(f"\n{Fore.YELLOW}Sample errors:")
+            click.echo(f"\n{Fore.YELLOW}Sample issues:")
             for error in errors[:5]:
                 click.echo(f"   • {error}")
 
-    def _export_migration(self, name: str, schema, sql_content: str):
-        """Export migration to JSON."""
-        self.print_header("Step 5: Export JSON")
-
-        click.echo(f"{Fore.CYAN}Exporting...")
-
-        output_dir = Path(app_config.output_dir) / "migrations"
-        output_dir.mkdir(parents=True, exist_ok=True)
-
-        timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        output_file = output_dir / f"{timestamp}_{name}.json"
-
-        exporter = JsonExporter()
-        exporter.export(output_file, schema, self.mappings)
-
-        click.echo(f"{Fore.GREEN}✅ Exported!")
-        click.echo(f"   File: {output_file}")
-
-    def _import_migration(self):
-        """Import migration to Gaud API."""
-        self.print_header("Step 6: Import via API")
+    def _import_via_endpoints(self, backup_file: Path):
+        """Import migration via existing gaud-erp-api endpoints."""
+        self.print_header("Step 5: Import via API Endpoints")
 
         if not app_config.gaud_api.api_key:
             click.echo(f"{Fore.YELLOW}API key not configured")
             app_config.gaud_api.api_key = click.prompt("Enter API key", hide_input=True)
 
-        click.echo(f"{Fore.CYAN}Importing to {app_config.gaud_api.base_url}...")
+        click.echo(f"{Fore.CYAN}Validating endpoint mappings...")
 
+        # Validate that all tables have endpoint mappings
+        mappings = self.data_importer.validate_mappings(
+            [t.name for t in self.current_schema.tables]
+        )
+
+        unmapped = [name for name, endpoint in mappings.items() if endpoint is None]
+        if unmapped:
+            click.echo(f"{Fore.RED}❌ No endpoint mappings found for:")
+            for name in unmapped:
+                click.echo(f"   • {name}")
+            if not click.confirm("Continue anyway?", default=False):
+                return
+
+        click.echo(f"{Fore.CYAN}Preparing data for import...")
+
+        # Prepare data for import (transform and map)
         try:
-            job_id = self.gaud_client.import_data(
-                source_schema=self.current_schema,
-                mappings=self.mappings,
-            )
+            import_data = self._prepare_import_data(backup_file)
 
-            click.echo(f"{Fore.GREEN}✅ Import started!")
-            click.echo(f"   Job ID: {job_id}")
+            if not import_data:
+                click.echo(f"{Fore.RED}No data to import")
+                return
 
-            # Monitor progress
-            self._monitor_import(job_id)
+            # Import via endpoints
+            click.echo(f"{Fore.CYAN}Starting import to {app_config.gaud_api.base_url}...")
+            results = self.data_importer.import_tables(import_data, dry_run=False)
+
+            # Show summary
+            total_success = sum(r.get('created', 0) for r in results.values())
+            total_errors = sum(r.get('errors', 0) for r in results.values())
+
+            if total_errors == 0:
+                click.echo(f"\n{Fore.GREEN}✅ Import completed successfully!")
+                click.echo(f"{Fore.GREEN}   Total records created: {total_success}")
+            else:
+                click.echo(f"\n{Fore.YELLOW}⚠️  Import partially completed")
+                click.echo(f"{Fore.YELLOW}   Records created: {total_success}")
+                click.echo(f"{Fore.YELLOW}   Errors: {total_errors}")
 
         except Exception as e:
-            click.echo(f"{Fore.RED}Import failed: {e}")
+            click.echo(f"{Fore.RED}❌ Import failed: {e}")
 
-    def _monitor_import(self, job_id: str):
-        """Monitor import progress."""
-        click.echo(f"\n{Fore.CYAN}Monitoring progress...")
+    def _prepare_import_data(self, backup_file: Path) -> Dict[str, List[dict]]:
+        """
+        Prepare data for import by reading backup and transforming.
 
-        with click.progressbar(length=100, label="Progress") as bar:
-            for i in range(10):
-                status = self.gaud_client.get_status(job_id)
+        Args:
+            backup_file: Path to backup file
 
-                if status:
-                    progress = status.get("progress", 0)
-                    bar.update(progress - bar.pos)
+        Returns:
+            {table_name: [transformed_rows]}
+        """
+        # For now, return empty dict
+        # In production, this would read the backup file and transform the data
+        # based on the mappings and transformers
+        click.echo(f"{Fore.YELLOW}Note: Data transformation coming in PHASE 3")
+        return {}
 
-                    if status.get("status") == "COMPLETED":
-                        click.echo(f"\n{Fore.GREEN}✅ Import completed!")
-                        click.echo(
-                            f"   Records: {status.get('statistics', {}).get('successRecords', 0)}"
-                        )
-                        break
-
-                click.echo(".")
 
     def run_direct(self, backup_file: str, non_interactive: bool = False):
         """Run migration directly without interactive menu."""
