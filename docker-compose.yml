@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  # Main gaud-erp-migration service with Phase 1-2 implemented
+  migration-tool:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: gaud-erp-migration-dev
+
+    # Environment variables
+    environment:
+      - GAUD_API_URL=https://api-v2.gauderp.com
+      - GAUD_USERNAME=art motos
+      - GAUD_PASSWORD=admin
+      - PYTHONUNBUFFERED=1
+      - PYTHONDONTWRITEBYTECODE=1
+      - LOG_LEVEL=INFO
+
+    # Volume mounts for development
+    volumes:
+      # Source code (read-write for development)
+      - .:/workspace
+      # Cache directory for schema caching
+      - ./cache/schemas:/workspace/.cache/schemas
+      # Test results
+      - ./test-results:/workspace/test-results
+      # BANCO.MDB file (when ready)
+      - ${BANCO_MDB_PATH:-./data}:/data:ro
+
+    # Ports
+    ports:
+      - "8000:8000"  # For future API server if needed
+
+    # Working directory
+    working_dir: /workspace
+
+    # Default command - runs tests on start
+    # Override with: docker-compose run --rm migration-tool python main.py
+    command: >
+      sh -c "
+        echo '=================================================='
+        echo 'gaud-erp-migration Phase 1-2 Docker Environment'
+        echo '=================================================='
+        echo ''
+        echo 'Running tests...'
+        python -m pytest tests/test_introspection.py tests/test_payload_builder.py -v
+        echo ''
+        echo 'Testing Phase 1 with real Gaud API...'
+        python test_phase1_real_api.py
+        echo ''
+        echo 'Testing Phase 1 + Phase 2 integration...'
+        python test_phase1_phase2_integration.py
+        echo ''
+        echo '=================================================='
+        echo 'All tests completed! Container ready for interaction.'
+        echo '=================================================='
+        echo ''
+        echo 'Available commands:'
+        echo '  python main.py                    - Run main CLI'
+        echo '  python -m pytest                  - Run tests'
+        echo '  python test_phase1_real_api.py    - Test API introspection'
+        echo '  python test_phase1_phase2_integration.py - E2E test'
+        echo ''
+        /bin/bash
+      "
+
+    # Keep container running
+    stdin_open: true
+    tty: true
+
+    # Network
+    networks:
+      - gaud-network
+
+networks:
+  gaud-network:
+    driver: bridge
