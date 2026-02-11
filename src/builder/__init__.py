@@ -8,7 +8,7 @@ Builds complex nested Gaud API payloads from source data with:
 - Template-based payload generation
 """
 
-from .payload_builder import PayloadBuilder
+from .payload_builder import PayloadBuilder, build_product_payload, build_brand_payload
 from .field_builder import FieldBuilder, AttributeMapping
 from .template_engine import TemplateEngine
 
@@ -17,4 +17,6 @@ __all__ = [
     "FieldBuilder",
     "AttributeMapping",
     "TemplateEngine",
+    "build_product_payload",
+    "build_brand_payload",
 ]
